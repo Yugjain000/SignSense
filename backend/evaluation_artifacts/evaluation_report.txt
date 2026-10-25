@@ -1,0 +1,44 @@
+============================================================
+      SIGNSENSE: ACADEMIC MODEL EVALUATION REPORT
+============================================================
+
+Evaluation Date: 2026-10-14 21:28:39
+Total Dataset Samples: 1132
+Feature Dimension: 126 normalized keypoints
+Total Classes in Vocabulary: 121
+
+--- METRICS BREAKDOWN ---
+Training Accuracy   : 99.34%
+Testing Accuracy    : 40.97%
+Balanced Accuracy   : 25.06%
+Precision (Weighted): 32.26%
+Recall (Weighted)   : 40.97%
+F1-Score (Weighted) : 34.54%
+
+--- LATENCY & THROUGHPUT ---
+Mean Inference Latency: 34.33 ms
+95th Percentile Latency: 39.82 ms
+Estimated Model Throughput: 29.1 FPS
+
+--- CLASSIFICATION REPORT (Top Evaluated Classes) ---
+                precision    recall  f1-score   support
+
+           YOU       0.50      0.33      0.40         3
+  I_ME_MINE_MY       1.00      1.00      1.00         3
+         SORRY       0.00      0.00      0.00         1
+          FOOD       0.33      1.00      0.50         1
+         WATER       1.00      0.33      0.50         3
+          WHAT       0.67      0.80      0.73         5
+          HELP       0.60      1.00      0.75         3
+COLLEGE_SCHOOL       1.00      1.00      1.00         2
+           HOW       1.00      0.33      0.50         3
+         ANGRY       0.50      0.33      0.40         3
+     BEAUTIFUL       0.76      0.81      0.79        16
+        CRYING       1.00      0.89      0.94         9
+            DO       1.00      0.50      0.67         6
+        FRIEND       0.80      0.80      0.80         5
+         HAPPY       0.65      0.83      0.73        18
+
+      accuracy                           0.74        81
+     macro avg       0.72      0.66      0.65        81
+  weighted avg       0.77      0.74      0.73        81
