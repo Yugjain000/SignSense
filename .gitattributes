@@ -1,0 +1,6 @@
+*.cmake linguist-vendored
+CMakeLists.txt linguist-vendored
+flutter_app/linux/flutter/generated_plugins.cmake linguist-vendored
+flutter_app/windows/flutter/generated_plugins.cmake linguist-vendored
+flutter_app/macos/** linguist-vendored
+flutter_app/ios/** linguist-vendored
