@@ -13,8 +13,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     cameras = await availableCameras();
-  } on CameraException catch (e) {
-    print('Error: $e.code\nError Message: $e.message');
+  } catch (_) {
+    // If cameras cannot be queried on startup (common on Web before user grants permission),
+    // DashboardScreen._initializeCameraWithPermissions will safely initialize it.
   }
   runApp(SignLanguageApp());
 }
@@ -94,22 +95,34 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   }
 
   Future<void> _initializeCameraWithPermissions() async {
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.camera,
-      Permission.microphone,
-    ].request();
+    bool hasPermission = false;
+    if (kIsWeb) {
+      hasPermission = true;
+    } else {
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.camera,
+        Permission.microphone,
+      ].request();
+      hasPermission = statuses[Permission.camera] == PermissionStatus.granted;
+    }
 
-    if (statuses[Permission.camera] == PermissionStatus.granted) {
-      cameras = await availableCameras();
-      if (cameras.isNotEmpty) {
-        final frontCamera = cameras.firstWhere(
-          (camera) => camera.lensDirection == CameraLensDirection.front,
-          orElse: () => cameras.first,
-        );
-        controller = CameraController(frontCamera, ResolutionPreset.low);
-        await controller!.initialize();
-        if (!mounted) return;
-        setState(() {});
+    if (hasPermission) {
+      try {
+        if (cameras.isEmpty) {
+          cameras = await availableCameras();
+        }
+        if (cameras.isNotEmpty) {
+          final frontCamera = cameras.firstWhere(
+            (camera) => camera.lensDirection == CameraLensDirection.front,
+            orElse: () => cameras.first,
+          );
+          controller = CameraController(frontCamera, ResolutionPreset.low);
+          await controller!.initialize();
+          if (!mounted) return;
+          setState(() {});
+        }
+      } catch (e) {
+        print("Camera initialization error: $e");
       }
     }
   }
