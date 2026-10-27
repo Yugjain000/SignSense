@@ -73,6 +73,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   String currentDetection = "Camera Off / Inactive";
   List<List<Offset>> currentLandmarks = [];
   bool isMirrored = true;
+  bool _isCapturing = false;
 
   Timer? frameTimer;
   DateTime? lastWordTime;
@@ -149,6 +150,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
       } else {
         frameTimer?.cancel();
         silenceTimer?.cancel();
+        _isCapturing = false;
         currentDetection = "Camera Off / Inactive";
         currentLandmarks = [];
       }
@@ -156,8 +158,10 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   }
 
   void startFrameCapture() {
-    frameTimer = Timer.periodic(Duration(milliseconds: 200), (timer) async {
+    frameTimer = Timer.periodic(Duration(milliseconds: 150), (timer) async {
       if (!isRecording || controller == null || !controller!.value.isInitialized) return;
+      if (_isCapturing) return;
+      _isCapturing = true;
       try {
         final image = await controller!.takePicture();
         final bytes = await image.readAsBytes();
@@ -216,6 +220,8 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
         }
       } catch (e) {
         print("Frame error: $e");
+      } finally {
+        _isCapturing = false;
       }
     });
   }
