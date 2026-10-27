@@ -123,6 +123,22 @@ def extract_keypoints(detection_result):
             if has_lh: lh = lh / max_val
             if has_rh: rh = rh / max_val
 
+        # Handedness-invariant slotting: primary hand always in slots 0..62
+        if has_rh and not has_lh:
+            primary = rh
+            secondary = np.zeros((21, 3))
+        elif has_lh and not has_rh:
+            primary = lh
+            secondary = np.zeros((21, 3))
+        elif has_lh and has_rh:
+            primary = rh
+            secondary = lh
+        else:
+            primary = np.zeros((21, 3))
+            secondary = np.zeros((21, 3))
+            
+        return np.concatenate([primary.flatten(), secondary.flatten()])
+
     return np.concatenate([lh.flatten(), rh.flatten()])
 
 # Sequence management for live camera
@@ -165,12 +181,23 @@ def process_frame(data: FrameData):
             for hand_lms in detection_result.hand_landmarks:
                 raw_landmarks.append([[round(lm.x, 3), round(lm.y, 3)] for lm in hand_lms])
 
-        # Predict on this single frame (126 features)
+        # Predict on this single frame (126 features) with confidence thresholding
         input_data = keypoints.reshape(1, -1)
-        prediction_index = model.predict(input_data)[0]
-        current_prediction = actions[prediction_index]
-        
-        prediction_buffer.append(current_prediction)
+        current_prediction = "Tracking hand..."
+
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(input_data)[0]
+            max_prob = float(np.max(probs))
+            pred_idx = int(np.argmax(probs))
+
+            # Only accept predictions with >= 35% confidence (eliminates random false guesses)
+            if max_prob >= 0.35:
+                current_prediction = actions[pred_idx]
+                prediction_buffer.append(current_prediction)
+        else:
+            prediction_index = model.predict(input_data)[0]
+            current_prediction = actions[prediction_index]
+            prediction_buffer.append(current_prediction)
         
         # Debounce: If we have 5 frames and the most common prediction appears at least 3 times
         confirmed_word = None

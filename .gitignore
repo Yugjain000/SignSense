@@ -3,6 +3,7 @@
 # ==========================================
 
 # Python & Virtual Environments
+*_backup.pkl
 backend/venv/
 backend/env/
 venv/
