@@ -1,9 +1,9 @@
 """
 SignSense Real-Time Dynamic ISL Word-Level Recognition System
 - PyTorch 99.88% CNN+LSTM (17 Classes) & 98.5% StackLSTM (61 Classes)
-- Zero-wait rolling buffer (Instant predictions from frame 1)
-- Live On-Screen Action Cheat Sheet & Visual Confidence Gauges
-- Auto-mirrored camera with anatomical un-flipped MediaPipe pipeline
+- Dual-Mode: Continuous Live Streaming + Spacebar Precision Gesture Recording
+- Upper Body Pose + Hands Skeleton Overlay with Distance/Framing Guidance
+- Peak-Hold Latch (Holds confirmed gesture on-screen for 3.0s)
 """
 
 import os
@@ -38,7 +38,7 @@ CLASSES_61 = [
 ]
 
 ACTION_HINTS = [
-    ("FEVER", "Back of hand on forehead"),
+    ("FEVER", "Bring hand up to forehead"),
     ("HELLO", "Salute outward from temple"),
     ("GIVE", "Push open palms forward"),
     ("KEY", "Twist key in air twice"),
@@ -129,7 +129,6 @@ holistic = mp_holistic.Holistic(
     model_complexity=0
 )
 
-# Hand connections for custom drawing on mirrored frame
 HAND_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 4),
     (0, 5), (5, 6), (6, 7), (7, 8),
@@ -137,6 +136,15 @@ HAND_CONNECTIONS = [
     (9, 13), (13, 14), (14, 15), (15, 16),
     (13, 17), (17, 18), (18, 19), (19, 20),
     (0, 17)
+]
+
+# Upper body pose connections (mirrored)
+POSE_ARM_PAIRS = [
+    (11, 12), # Left shoulder to Right shoulder
+    (11, 13), # Left shoulder to Left elbow
+    (13, 15), # Left elbow to Left wrist
+    (12, 14), # Right shoulder to Right elbow
+    (14, 16), # Right elbow to Right wrist
 ]
 
 def process_keypoints(results):
@@ -157,6 +165,17 @@ def draw_mirrored_hand(frame, landmarks, color, w, h):
     for pt in pts:
         cv2.circle(frame, pt, 4, color, -1, cv2.LINE_AA)
         cv2.circle(frame, pt, 2, (255, 255, 255), -1, cv2.LINE_AA)
+
+def draw_mirrored_pose(frame, pose_landmarks, w, h):
+    lms = pose_landmarks.landmark
+    pts = {i: (int((1.0 - lms[i].x) * w), int(lms[i].y * h)) for i in range(len(lms))}
+    for p1, p2 in POSE_ARM_PAIRS:
+        if p1 in pts and p2 in pts:
+            # Check visibility
+            if lms[p1].visibility > 0.4 and lms[p2].visibility > 0.4:
+                cv2.line(frame, pts[p1], pts[p2], (0, 255, 128), 2, cv2.LINE_AA)
+                cv2.circle(frame, pts[p1], 4, (0, 200, 100), -1, cv2.LINE_AA)
+                cv2.circle(frame, pts[p2], 4, (0, 200, 100), -1, cv2.LINE_AA)
 
 FRAME_LENGTH = 50
 
@@ -191,10 +210,19 @@ def main():
     motion_energy = 0.0
     prev_hand_pts = None
 
+    # Latch for confirmed predictions
+    confirmed_word = ""
+    confirmed_conf = 0.0
+    confirmed_timestamp = 0.0
+
+    # Spacebar Gesture Recording State: 'IDLE', 'COUNTDOWN', 'RECORDING'
+    rec_state = 'IDLE'
+    rec_buffer = []
+    countdown_start = 0.0
+
     fps_time = time.time()
     fps = 0.0
 
-    # Main combined canvas dimensions: 640 (cam) + 380 (sidebar) = 1020 x 520
     CANVAS_W = 1020
     CANVAS_H = 520
     CAM_W = 640
@@ -202,10 +230,11 @@ def main():
 
     cv2.namedWindow("SignSense Dynamic ISL Pro", cv2.WINDOW_AUTOSIZE)
 
-    print("\n[+] Engine running! Instant Zero-Wait Buffer Active.")
+    print("\n[+] Engine running!")
+    print("    - Tap [SPACE]: Precision 50-Frame Sign Recording (3.. 2.. 1.. GO!)")
     print("    - Press '1': 17 Words (CNN+LSTM 99.88%)")
     print("    - Press '2': 61 Words (StackLSTM 98.5%)")
-    print("    - Press 'c': Clear buffer / Reset motion")
+    print("    - Press 'c': Clear buffer / Reset")
     print("    - Press 'q': Exit\n")
 
     while cap.isOpened():
@@ -213,25 +242,34 @@ def main():
         if not ret:
             break
 
-        # Process native raw frame for MediaPipe
+        # MediaPipe native raw frame
         rgb_raw = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB)
         rgb_raw.flags.writeable = False
         results = holistic.process(rgb_raw)
         rgb_raw.flags.writeable = True
 
-        # Display camera feed (mirrored)
         display_frame = cv2.flip(raw_frame, 1)
         h, w, _ = display_frame.shape
 
-        # Calculate motion energy
+        # Draw Pose (Shoulders & Arms)
+        shoulders_visible = False
+        if results.pose_landmarks:
+            draw_mirrored_pose(display_frame, results.pose_landmarks, w, h)
+            # Check shoulder visibility and framing
+            l_sh = results.pose_landmarks.landmark[11]
+            r_sh = results.pose_landmarks.landmark[12]
+            if l_sh.visibility > 0.4 and r_sh.visibility > 0.4 and l_sh.y < 0.90 and r_sh.y < 0.90:
+                shoulders_visible = True
+
+        # Draw Hands
         curr_pts = []
         has_hands = (results.left_hand_landmarks is not None) or (results.right_hand_landmarks is not None)
 
         if results.left_hand_landmarks:
-            draw_mirrored_hand(display_frame, results.left_hand_landmarks, (255, 180, 0), w, h) # Left = Cyan
+            draw_mirrored_hand(display_frame, results.left_hand_landmarks, (255, 180, 0), w, h)
             curr_pts.extend([[lm.x, lm.y] for lm in results.left_hand_landmarks.landmark])
         if results.right_hand_landmarks:
-            draw_mirrored_hand(display_frame, results.right_hand_landmarks, (60, 80, 255), w, h) # Right = Coral Red
+            draw_mirrored_hand(display_frame, results.right_hand_landmarks, (60, 80, 255), w, h)
             curr_pts.extend([[lm.x, lm.y] for lm in results.right_hand_landmarks.landmark])
 
         if len(curr_pts) > 0 and prev_hand_pts is not None and len(prev_hand_pts) == len(curr_pts):
@@ -241,98 +279,146 @@ def main():
             motion_energy = 0.8 * motion_energy
         prev_hand_pts = curr_pts
 
-        # Update FPS
         curr_time = time.time()
         fps = 0.9 * fps + 0.1 * (1.0 / max(1e-5, (curr_time - fps_time)))
         fps_time = curr_time
 
-        # Extract features
         keypoints = process_keypoints(results)
 
-        # Zero-wait initialization: pad initial buffer immediately so prediction starts instantly!
-        if len(sequence) == 0:
-            for _ in range(FRAME_LENGTH):
-                sequence.append(keypoints)
-        else:
-            sequence.append(keypoints)
-            if len(sequence) > FRAME_LENGTH:
-                sequence.pop(0)
-
-        # Predict every 2 frames for ultra-fluid real-time response
-        if has_hands:
-            seq_tensor = torch.tensor(np.array(sequence), dtype=torch.float32).unsqueeze(0)
-            with torch.no_grad():
-                preds = active_model(seq_tensor).squeeze(0).numpy()
-
-            top_indices = np.argsort(preds)[::-1][:4]
-            top_predictions = [(active_classes[i], float(preds[i])) for i in top_indices]
-
-            top1_word, top1_conf = top_predictions[0]
-            confidence_score = top1_conf
-
-            if confidence_score >= 0.45:
-                detected_word = top1_word
-            elif motion_energy > 1.2:
-                detected_word = f"{top1_word}?"
+        # -------------------------------------------------------------
+        # Precision Recording via Spacebar
+        # -------------------------------------------------------------
+        if rec_state == 'COUNTDOWN':
+            elapsed = curr_time - countdown_start
+            rem = int(3.0 - elapsed) + 1
+            if rem > 0:
+                cv2.rectangle(display_frame, (w//2 - 140, h//2 - 60), (w//2 + 140, h//2 + 40), (20, 20, 30), -1)
+                cv2.putText(display_frame, f"STARTING IN: {rem}", (w//2 - 120, h//2),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.9, (0, 230, 255), 2, cv2.LINE_AA)
             else:
-                detected_word = "PERFORM SIGN"
-        else:
-            detected_word = "SHOW HANDS"
-            confidence_score = 0.0
-            top_predictions = []
+                rec_state = 'RECORDING'
+                rec_buffer = []
+
+        elif rec_state == 'RECORDING':
+            rec_buffer.append(keypoints)
+            progress = len(rec_buffer) / FRAME_LENGTH
+            # Overlay recording banner
+            cv2.rectangle(display_frame, (20, h - 60), (w - 20, h - 20), (30, 30, 45), -1)
+            cv2.rectangle(display_frame, (20, h - 60), (int(20 + (w - 40) * progress), h - 20), (0, 140, 255), -1)
+            cv2.putText(display_frame, f"RECORDING SIGN... ({len(rec_buffer)}/{FRAME_LENGTH})", (30, h - 33),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+            if len(rec_buffer) >= FRAME_LENGTH:
+                # Run model on exact 50 recorded frames
+                seq_tensor = torch.tensor(np.array(rec_buffer), dtype=torch.float32).unsqueeze(0)
+                with torch.no_grad():
+                    preds = active_model(seq_tensor).squeeze(0).numpy()
+                top_indices = np.argsort(preds)[::-1][:4]
+                top_predictions = [(active_classes[i], float(preds[i])) for i in top_indices]
+                
+                best_word, best_conf = top_predictions[0]
+                confirmed_word = best_word
+                confirmed_conf = best_conf
+                confirmed_timestamp = curr_time
+                detected_word = best_word
+                confidence_score = best_conf
+                rec_state = 'IDLE'
 
         # -------------------------------------------------------------
-        # Construct Unified Dashboard Canvas (1020 x 520)
+        # Continuous Live Rolling Stream (when not in recording mode)
+        # -------------------------------------------------------------
+        if rec_state == 'IDLE':
+            if len(sequence) == 0:
+                for _ in range(FRAME_LENGTH):
+                    sequence.append(keypoints)
+            else:
+                sequence.append(keypoints)
+                if len(sequence) > FRAME_LENGTH:
+                    sequence.pop(0)
+
+            if has_hands:
+                seq_tensor = torch.tensor(np.array(sequence), dtype=torch.float32).unsqueeze(0)
+                with torch.no_grad():
+                    preds = active_model(seq_tensor).squeeze(0).numpy()
+
+                top_indices = np.argsort(preds)[::-1][:4]
+                top_predictions = [(active_classes[i], float(preds[i])) for i in top_indices]
+
+                top1_word, top1_conf = top_predictions[0]
+                confidence_score = top1_conf
+
+                # Peak-hold latch: If confidence hits >= 45%, latch it for 3 seconds
+                if confidence_score >= 0.45:
+                    detected_word = top1_word
+                    confirmed_word = top1_word
+                    confirmed_conf = top1_conf
+                    confirmed_timestamp = curr_time
+                elif curr_time - confirmed_timestamp < 3.0:
+                    detected_word = confirmed_word
+                    confidence_score = confirmed_conf
+                elif motion_energy > 1.2:
+                    detected_word = f"{top1_word}?"
+                else:
+                    detected_word = "PERFORM SIGN"
+            else:
+                if curr_time - confirmed_timestamp < 3.0:
+                    detected_word = confirmed_word
+                    confidence_score = confirmed_conf
+                else:
+                    detected_word = "SHOW HANDS"
+                    confidence_score = 0.0
+
+        # -------------------------------------------------------------
+        # Canvas Construction (1020 x 520)
         # -------------------------------------------------------------
         canvas = np.zeros((CANVAS_H, CANVAS_W, 3), dtype=np.uint8)
-        canvas[:] = (20, 22, 26)  # Modern dark slate background
+        canvas[:] = (20, 22, 26)
 
-        # Place camera feed in canvas (fit 640x480 inside left area with small 20px padding)
         cam_resized = cv2.resize(display_frame, (CAM_W, CAM_H))
         canvas[20:20+CAM_H, 20:20+CAM_W] = cam_resized
-
-        # Draw border around video
         cv2.rectangle(canvas, (19, 19), (21+CAM_W, 21+CAM_H), (55, 60, 72), 1)
 
-        # Small FPS badge over camera
-        cv2.rectangle(canvas, (30, 30), (160, 60), (15, 18, 22), -1)
-        cv2.putText(canvas, f"FPS: {fps:.0f} | 640x480", (38, 51),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.45, (160, 220, 160), 1, cv2.LINE_AA)
+        # FPS badge
+        cv2.rectangle(canvas, (30, 30), (160, 58), (15, 18, 22), -1)
+        cv2.putText(canvas, f"FPS: {fps:.0f} | 640x480", (38, 50),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.42, (160, 220, 160), 1, cv2.LINE_AA)
+
+        # Shoulder framing reminder if sitting too close
+        if not shoulders_visible:
+            cv2.rectangle(canvas, (175, 30), (450, 58), (30, 40, 60), -1)
+            cv2.putText(canvas, "TIP: Sit back slightly to show shoulders", (182, 50),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.38, (0, 210, 255), 1, cv2.LINE_AA)
 
         # -------------------------------------------------------------
-        # Right Sidebar: Telemetry & Action Cheat Sheet
+        # Right Sidebar
         # -------------------------------------------------------------
         sb_x = 680
 
-        # Header Title
         cv2.putText(canvas, "SIGNSENSE PRO", (sb_x, 42),
                     cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 255, 255), 1, cv2.LINE_AA)
         cv2.putText(canvas, active_model_name, (sb_x, 62),
                     cv2.FONT_HERSHEY_DUPLEX, 0.42, (180, 190, 210), 1, cv2.LINE_AA)
-
-        # Divider line
         cv2.line(canvas, (sb_x, 72), (CANVAS_W - 25, 72), (45, 50, 60), 1)
 
-        # Active Sign Display Box
+        # Detection Box
         box_y = 85
         cv2.rectangle(canvas, (sb_x, box_y), (CANVAS_W - 25, box_y + 75), (28, 32, 40), -1)
         cv2.rectangle(canvas, (sb_x, box_y), (CANVAS_W - 25, box_y + 75), (60, 68, 82), 1)
 
-        cv2.putText(canvas, "DETECTED GESTURE", (sb_x + 12, box_y + 20),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.40, (140, 150, 170), 1, cv2.LINE_AA)
+        header_label = "CONFIRMED SIGN" if (curr_time - confirmed_timestamp < 3.0 and confirmed_conf >= 0.45) else "DETECTED GESTURE"
+        cv2.putText(canvas, header_label, (sb_x + 12, box_y + 20),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.40, (0, 230, 255) if header_label == "CONFIRMED SIGN" else (140, 150, 170), 1, cv2.LINE_AA)
 
-        # Word Color
         if confidence_score >= 0.70:
-            word_color = (60, 240, 120)  # Bright green
+            word_color = (60, 240, 120)
         elif confidence_score >= 0.45:
-            word_color = (0, 210, 255)   # Amber / gold
+            word_color = (0, 210, 255)
         else:
-            word_color = (180, 190, 205)  # Muted grey
+            word_color = (180, 190, 205)
 
         cv2.putText(canvas, detected_word.upper(), (sb_x + 12, box_y + 54),
                     cv2.FONT_HERSHEY_DUPLEX, 0.95, word_color, 2, cv2.LINE_AA)
 
-        # Confidence Bar
         bar_y = box_y + 68
         bar_w_max = (CANVAS_W - 25) - (sb_x + 12) - 12
         conf_fill = int(bar_w_max * max(0.0, min(1.0, confidence_score)))
@@ -349,20 +435,17 @@ def main():
         if len(top_predictions) > 0:
             for idx, (c_name, c_prob) in enumerate(top_predictions[:3]):
                 row_y = meter_start_y + (idx * 22)
-                # Label
                 cv2.putText(canvas, f"{c_name:<11}", (sb_x, row_y + 11),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 205, 215), 1, cv2.LINE_AA)
-                # Bar
                 m_bar_x = sb_x + 95
                 m_bar_w = 150
                 m_fill = int(m_bar_w * max(0.0, min(1.0, c_prob)))
                 cv2.rectangle(canvas, (m_bar_x, row_y + 3), (m_bar_x + m_bar_w, row_y + 12), (35, 40, 50), -1)
                 cv2.rectangle(canvas, (m_bar_x, row_y + 3), (m_bar_x + m_fill, row_y + 12), (0, 200, 255) if idx == 0 else (100, 110, 130), -1)
-                # Percent
                 cv2.putText(canvas, f"{c_prob*100:.0f}%", (m_bar_x + m_bar_w + 10, row_y + 11),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.38, (170, 180, 195), 1, cv2.LINE_AA)
 
-        # Action Guide (Quick Reference Cheat Sheet)
+        # Action Guide
         guide_y = 265
         cv2.line(canvas, (sb_x, guide_y), (CANVAS_W - 25, guide_y), (45, 50, 60), 1)
         cv2.putText(canvas, "TRY THESE EASY SIGNS:", (sb_x, guide_y + 20),
@@ -371,33 +454,35 @@ def main():
         start_hint_y = guide_y + 38
         for i, (sign_label, sign_desc) in enumerate(ACTION_HINTS[:5]):
             h_y = start_hint_y + (i * 30)
-            # Dot
             cv2.circle(canvas, (sb_x + 4, h_y + 4), 3, (80, 190, 255), -1)
-            # Sign Name
             cv2.putText(canvas, f"{sign_label}:", (sb_x + 14, h_y + 8),
                         cv2.FONT_HERSHEY_DUPLEX, 0.42, (240, 240, 255), 1, cv2.LINE_AA)
-            # Description
             cv2.putText(canvas, sign_desc, (sb_x + 85, h_y + 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.36, (150, 160, 175), 1, cv2.LINE_AA)
 
         # Bottom Instructions & Shortcuts
         ctrl_y = CANVAS_H - 30
         cv2.line(canvas, (sb_x, ctrl_y - 12), (CANVAS_W - 25, ctrl_y - 12), (45, 50, 60), 1)
-        cv2.putText(canvas, "[1] 17 Words  [2] 61 Words  [c] Reset  [q] Quit", (sb_x, ctrl_y + 8),
+        cv2.putText(canvas, "[SPACE] Record Sign   [1] 17W   [2] 61W   [q] Quit", (sb_x, ctrl_y + 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (120, 130, 145), 1, cv2.LINE_AA)
 
-        # Render combined frame
         cv2.imshow("SignSense Dynamic ISL Pro", canvas)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
+        elif key == 32:  # Spacebar
+            rec_state = 'COUNTDOWN'
+            countdown_start = time.time()
         elif key == ord('1'):
             switch_model(1)
         elif key == ord('2'):
             switch_model(2)
         elif key == ord('c'):
             sequence = []
+            rec_state = 'IDLE'
+            confirmed_word = ""
+            confirmed_conf = 0.0
             detected_word = "BUFFER RESET"
             confidence_score = 0.0
 
