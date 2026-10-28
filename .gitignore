@@ -41,3 +41,10 @@ flutter_app/windows/flutter/ephemeral
 *~
 .DS_Store
 Thumbs.db
+
+# Springer Research Models
+research_model/An-Efficient*
+research_model/*.keras
+research_model/*.pt
+research_model/weights_*
+
