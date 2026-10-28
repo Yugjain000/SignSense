@@ -1,9 +1,6 @@
 """
 Real-Time Dynamic ISL Word-Level Recognition System
-Powered by PyTorch & MediaPipe Holistic
-Based on Springer Nature Research Paper:
-'An Efficient Real-Time Word-Level Recognition of Indian Sign Language' (2024)
-Authors: Chaitanya Madhav R, Prasad S Shet, Mohan Murali K S, Likhith R (PES University)
+Optimized for Instant Low-Latency Live CPU Tracking (PyTorch + MediaPipe Holistic Lite)
 """
 
 import os
@@ -88,9 +85,9 @@ class StackLSTM_61(nn.Module):
         logits = self.fc(last_step)
         return self.softmax(logits)
 
-# Load Models into Memory
+# Load PyTorch Models
 print("=" * 65)
-print("  Springer ISL Real-Time Recognition Engine (PyTorch CPU)")
+print("  Springer ISL Real-Time Recognition Engine (High-Speed CPU)")
 print("=" * 65)
 
 model_17 = CNN_LSTM_17()
@@ -103,17 +100,17 @@ model_61.load_state_dict(torch.load(os.path.join(BASE_DIR, "stack_lstm_61.pt"), 
 model_61.eval()
 print("[+] Loaded StackLSTM (61 Classes, 98.5% Accuracy)")
 
-# Active Model Selector
 active_model = model_17
 active_classes = CLASSES_17
 active_model_name = "CNN+LSTM (17 Words - 99.88% Accuracy)"
 
-# MediaPipe Setup
+# MediaPipe Setup (Lite complexity for max FPS on CPU)
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
 holistic = mp_holistic.Holistic(
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
+    min_detection_confidence=0.4,
+    min_tracking_confidence=0.4,
+    model_complexity=0
 )
 
 def process_keypoints(results):
@@ -139,7 +136,7 @@ def draw_styled_landmarks(image, results):
         mp_drawing.DrawingSpec(color=(255, 180, 0), thickness=2, circle_radius=3),
         mp_drawing.DrawingSpec(color=(0, 0, 0), thickness=2, circle_radius=1)
     )
-    # Upper Body: Green
+    # Pose: Green
     mp_drawing.draw_landmarks(
         image, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS,
         mp_drawing.DrawingSpec(color=(0, 255, 128), thickness=2, circle_radius=2),
@@ -147,8 +144,8 @@ def draw_styled_landmarks(image, results):
     )
 
 FRAME_LENGTH = 50
-SLIDE = 12
-CONF_THRESHOLD = 0.85
+SLIDE = 3 # Fast response: predicts every 3 frames (~10 times/second)!
+CONF_THRESHOLD = 0.70
 
 def switch_model(mode):
     global active_model, active_classes, active_model_name
@@ -168,15 +165,19 @@ def main():
     if not cap.isOpened():
         cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("[!] Error: Could not access webcam. Please make sure no other program is using it.")
+        print("[!] Error: Could not access webcam. Please verify camera permissions.")
         return
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    # Use standard 640x480 for 30 FPS smooth tracking
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     sequence = []
-    detected_word = "Ready - Perform a sign"
+    detected_word = "Ready - Show hand gesture"
     confidence_score = 0.0
+
+    fps_time = time.time()
+    fps = 0.0
 
     print("\n[+] Camera stream started! Controls:")
     print("    - Press '1': Switch to CNN+LSTM (17 Core Signs)")
@@ -186,11 +187,19 @@ def main():
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            print("[-] Camera frame dropped.")
             break
 
         frame = cv2.flip(frame, 1)
         h, w, _ = frame.shape
+
+        # Calculate FPS
+        curr_time = time.time()
+        fps = 0.9 * fps + 0.1 * (1.0 / max(1e-5, (curr_time - fps_time)))
+        fps_time = curr_time
+
+        # Check for pitch black camera (closed privacy shutter)
+        mean_brightness = float(np.mean(frame))
+        is_dark = mean_brightness < 8.0
 
         # MediaPipe Detection
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -200,40 +209,60 @@ def main():
 
         draw_styled_landmarks(frame, results)
         keypoints = process_keypoints(results)
+
+        # Instant warm-up: pre-fill buffer so user NEVER waits for 50 frames!
+        if len(sequence) == 0:
+            sequence = [keypoints] * (FRAME_LENGTH - 1)
+
         sequence.append(keypoints)
 
-        # Predict when buffer reaches 50 frames
-        if len(sequence) == FRAME_LENGTH:
-            seq_tensor = torch.tensor(np.array(sequence), dtype=torch.float32).unsqueeze(0)
-            with torch.no_grad():
-                preds = active_model(seq_tensor).squeeze(0).numpy()
-            
-            max_prob = float(np.max(preds))
-            best_idx = int(np.argmax(preds))
+        has_hands = (results.left_hand_landmarks is not None) or (results.right_hand_landmarks is not None)
 
-            if max_prob >= CONF_THRESHOLD:
-                detected_word = active_classes[best_idx]
-                confidence_score = max_prob
-            else:
-                detected_word = "Tracking motion..."
-                confidence_score = max_prob
+        # Predict every SLIDE frames
+        if len(sequence) >= FRAME_LENGTH:
+            if has_hands and not is_dark:
+                seq_tensor = torch.tensor(np.array(sequence[-FRAME_LENGTH:]), dtype=torch.float32).unsqueeze(0)
+                with torch.no_grad():
+                    preds = active_model(seq_tensor).squeeze(0).numpy()
+                
+                max_prob = float(np.max(preds))
+                best_idx = int(np.argmax(preds))
 
+                if max_prob >= CONF_THRESHOLD:
+                    detected_word = active_classes[best_idx]
+                    confidence_score = max_prob
+                else:
+                    detected_word = "Recognizing movement..."
+                    confidence_score = max_prob
+            elif not has_hands:
+                detected_word = "No hands in frame"
+                confidence_score = 0.0
+
+            # Slide window
             sequence = sequence[SLIDE:]
 
         # Header HUD
-        cv2.rectangle(frame, (0, 0), (w, 85), (15, 15, 25), -1)
-        cv2.putText(frame, active_model_name, (25, 32),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.75, (220, 220, 255), 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (0, 0), (w, 75), (15, 15, 25), -1)
+        cv2.putText(frame, active_model_name, (20, 28),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.65, (220, 220, 255), 1, cv2.LINE_AA)
         
-        status_text = f"Buffer: {len(sequence)}/{FRAME_LENGTH} | Confidence: {confidence_score*100:.1f}% | Keys: [1] 17 Words [2] 61 Words [q] Exit"
-        cv2.putText(frame, status_text, (25, 65),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.55, (160, 160, 160), 1, cv2.LINE_AA)
+        status_text = f"FPS: {fps:.0f} | Conf: {confidence_score*100:.1f}% | [1] 17 Words [2] 61 Words [q] Exit"
+        cv2.putText(frame, status_text, (20, 55),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.5, (160, 160, 160), 1, cv2.LINE_AA)
+
+        # Warning banner if camera shutter is physically closed
+        if is_dark:
+            cv2.rectangle(frame, (30, h // 2 - 40), (w - 30, h // 2 + 40), (0, 0, 180), -1)
+            cv2.putText(frame, "WEBCAM IS DARK / SHUTTER CLOSED!", (45, h // 2 - 10),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, "Please slide open your laptop camera privacy shutter", (45, h // 2 + 20),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
 
         # Bottom Detection Banner
-        cv2.rectangle(frame, (0, h - 90), (w, h), (15, 15, 25), -1)
+        cv2.rectangle(frame, (0, h - 80), (w, h), (15, 15, 25), -1)
         banner_color = (0, 255, 128) if confidence_score >= CONF_THRESHOLD else (180, 180, 180)
-        cv2.putText(frame, f"SIGN: {detected_word.upper()}", (30, h - 35),
-                    cv2.FONT_HERSHEY_DUPLEX, 1.2, banner_color, 2, cv2.LINE_AA)
+        cv2.putText(frame, f"SIGN: {detected_word.upper()}", (25, h - 30),
+                    cv2.FONT_HERSHEY_DUPLEX, 1.0, banner_color, 2, cv2.LINE_AA)
 
         cv2.imshow("SignSense Dynamic ISL - Springer Benchmark Engine", frame)
 
