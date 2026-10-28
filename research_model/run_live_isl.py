@@ -74,7 +74,9 @@ class CNN_LSTM_17(nn.Module):
         x, _ = self.lstm1(x)
         x, _ = self.lstm2(x)
         out, _ = self.lstm3(x)
-        last_step = out[:, -1, :]
+        fwd_last = out[:, -1, :64]
+        bwd_last = out[:, 0, 64:]
+        last_step = torch.cat([fwd_last, bwd_last], dim=-1)
         logits = self.fc(last_step)
         return self.softmax(logits)
 
@@ -95,7 +97,9 @@ class StackLSTM_61(nn.Module):
         x, _ = self.lstm3(x)
         x, _ = self.lstm4(x)
         out, _ = self.lstm5(x)
-        last_step = out[:, -1, :]
+        fwd_last = out[:, -1, :64]
+        bwd_last = out[:, 0, 64:]
+        last_step = torch.cat([fwd_last, bwd_last], dim=-1)
         logits = self.fc(last_step)
         return self.softmax(logits)
 
